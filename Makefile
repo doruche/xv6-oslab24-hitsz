@@ -164,6 +164,7 @@ UPROGS=\
 	$U/_zombie\
 	$U/_waittest\
 	$U/_exittest\
+	$U/_yieldtest\
 
 
 ifeq ($(LAB),trap)
@@ -244,8 +245,9 @@ qemu-gdb: $K/kernel .gdbinit fs.img
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
 gdb: 
-	$(GDB)
-
+	$(GDB) \
+		-ex 'file kernel/kernel' \
+		-ex 'set arch riscv:rv64' \
 ##
 ##  FOR testing lab grading script
 ##

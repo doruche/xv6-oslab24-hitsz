@@ -291,6 +291,26 @@ void reparent(struct proc *p) {
   }
 }
 
+static char* state_str[] = {
+    [UNUSED] = "unused",
+    [SLEEPING] = "sleeping",
+    [RUNNABLE] = "runnable",
+    [RUNNING] = "running",
+    [ZOMBIE] = "zombie",
+};
+
+void
+print_children(struct proc* p) {
+  struct proc* pp;
+  int child_num = 0;
+  for (pp = proc; pp < &proc[NPROC]; pp++) {
+    if (pp->parent == p) {
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", 
+        p->pid, child_num++, pp->pid, pp->name, state_str[pp->state]);
+    }
+  }
+}
+
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -338,6 +358,10 @@ void exit(int status) {
 
   acquire(&p->lock);
 
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n",
+    p->pid, p->parent->pid, p->parent->name, state_str[p->parent->state]);
+  print_children(p);
+
   // Give any children to init.
   reparent(p);
 
@@ -356,7 +380,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, uint32 flag) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -395,7 +419,14 @@ int wait(uint64 addr) {
     }
 
     // No point waiting if we don't have any children.
+    // We return -2 to indicate that children do exist but we can't wait for them.
     if (!havekids || p->killed) {
+      release(&p->lock);
+      return -2;
+    }
+
+    // If flag is set to true, we just do a non-blocking wait.
+    if (flag) {
       release(&p->lock);
       return -1;
     }
@@ -425,6 +456,12 @@ void scheduler(void) {
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
+        if (c->from_yield) {
+          c->from_yield = 0;
+          printf("Next runnable process pid is %d and user pc is %p\n",
+            p->pid, p->trapframe->epc);
+        }
+        
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
