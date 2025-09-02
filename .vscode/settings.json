@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "*.dump": "riscv",
+        "user.h": "c"
+    }
+}

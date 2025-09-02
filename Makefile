@@ -43,7 +43,7 @@ endif
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
-#TOOLPREFIX = 
+TOOLPREFIX = riscv64-unknown-elf-
 
 # Try to infer the correct TOOLPREFIX if not set
 ifndef TOOLPREFIX
@@ -157,6 +157,9 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_sleep\
+	$U/_pingpong\
+	$U/_find\
 
 
 ifeq ($(LAB),syscall)
@@ -219,7 +222,8 @@ docker:
 	docker $(DOCKER_RUN_ARGS)
 
 # try to generate a unique GDB port
-GDBPORT = $(shell expr `id -u` % 5000 + 25000)
+# GDBPORT = $(shell expr `id -u` % 5000 + 25000)
+GDBPORT = 26000
 # QEMU's gdb stub command line changed in 0.11
 QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
@@ -243,7 +247,10 @@ qemu-gdb: $K/kernel .gdbinit fs.img
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
 gdb: 
-	$(GDB)
+	$(GDB) \
+ 		-ex 'file $(K)/kernel' \
+ 		-ex 'set arch riscv:rv64' \
+# 		-ex 'target remote localhost:$(GDBPORT)'
 
 ##
 ##  FOR testing lab grading script
