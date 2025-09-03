@@ -328,7 +328,9 @@ ping:
 endif
 
 gdb: 
-	$(GDB)
+	$(GDB) \
+		-ex 'file kernel/kernel' \
+		-ex 'set arch riscv:rv64' \
 
 ##
 ##  FOR testing lab grading script

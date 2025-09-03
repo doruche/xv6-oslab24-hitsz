@@ -18,16 +18,39 @@ struct run {
   struct run *next;
 };
 
-struct {
+struct KMem {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+  int len;
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for (int i = 0; i < NCPU; i++) {
+    initlock(&kmem[i].lock, "kmem");
+    kmem[i].len = 0;
+  }
   freerange(end, (void*)PHYSTOP);
+}
+
+void
+kfree2(void* pa, int cpuid) {
+  struct run *r;
+
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kfree");
+
+  memset(pa, 1, PGSIZE);
+
+  r = (struct run*)pa;
+
+  struct KMem* cur_kmem = &kmem[cpuid];
+  acquire(&cur_kmem->lock);
+  r->next = cur_kmem->freelist;
+  cur_kmem->freelist = r;
+  cur_kmem->len++;
+  release(&cur_kmem->lock);
 }
 
 void
@@ -35,8 +58,26 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
-    kfree(p);
+  for(int cnt = 0; p + PGSIZE <= (char*)pa_end; p += PGSIZE, cnt++) {
+    kfree2(p, cnt % NCPU);
+  }
+}
+
+// Find the CPU with the least amount of free memory.
+// Would not acquire any lock, thus tiny inaccuracy might exist.
+// But that's acceptable.
+int
+poorest_cpuid() {
+  int min_cpu = 0;
+  int min_len = kmem[0].len;
+
+  for(int i = 1; i < NCPU; i++) {
+    if(kmem[i].len < min_len) {
+      min_len = kmem[i].len;
+      min_cpu = i;
+    }
+  }
+  return min_cpu;
 }
 
 // Free the page of physical memory pointed at by v,
@@ -44,22 +85,11 @@ freerange(void *pa_start, void *pa_end)
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
 void
-kfree(void *pa)
-{
-  struct run *r;
-
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+kfree(void *pa) {
+  // kfree2(pa, poorest_cpuid());
+  push_off();
+  kfree2(pa, cpuid());
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -68,13 +98,38 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
+  push_off();
   struct run *r;
+  struct KMem* cur_kmem = kmem + cpuid();
+  
+  acquire(&cur_kmem->lock);
+  r = cur_kmem->freelist;
+  if(r) {
+    cur_kmem->freelist = r->next;
+    cur_kmem->len--;
+  }
+  release(&cur_kmem->lock);
+  
+  pop_off();
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  if (!r) {
+    // steal
+    // in fact the following method will still not be perfect,
+    // for example memory lists we already checked might be allocated with new pages
+    // soon, and we can miss them. But that's really rare.
+    for (int i = 0; i < NCPU; i++) {
+      cur_kmem = kmem + i;
+      acquire(&cur_kmem->lock);
+      r = cur_kmem->freelist;
+      if(r) {
+        cur_kmem->freelist = r->next;
+        cur_kmem->len--;
+        release(&cur_kmem->lock);
+        break;
+      }
+      release(&cur_kmem->lock);
+    }
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
