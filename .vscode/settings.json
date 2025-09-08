@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+        "*.dump": "riscv",
+        "condition_variable": "c",
+        "mutex": "c",
+        "ostream": "c",
+        "stop_token": "c"
+    }
+}
