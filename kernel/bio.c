@@ -22,6 +22,8 @@
 #include "defs.h"
 #include "fs.h"
 #include "buf.h"
+#include "sleeplock.h"
+
 
 #define NBUCKETS 13
 
@@ -53,6 +55,7 @@ binit(void)
   struct buf *head;
 
   initlock(&bcache.biglock, "bcache big lock");
+  // initsleeplock(&bcache.biglock, "bcache big lock");
 
   for (int i = 0; i < NBUCKETS; i++) {
     initlock(&bcache.locks[i], "bcache");
@@ -92,8 +95,6 @@ bget(uint dev, uint blockno)
       return b;
     }
   }
-  
-  
   // Not cached.
   // Find an unused buffer to recycle, from this bucket.
   for (b = bcache.heads[bucketno].prev; b != &bcache.heads[bucketno]; b = b->prev){
@@ -112,37 +113,83 @@ bget(uint dev, uint blockno)
 
   // If not found, check other buckets.
   // I.e, stealing.
+  int found = 0;
+  int i = 0;
   acquire(&bcache.biglock);
-  for (int i = 0; i < NBUCKETS; i++) {
-    if (i == bucketno) {
-      continue;
-    }
-    // acquire(&bcache.locks[i]);
-
+  for (i = 0; i < NBUCKETS; i++) {
+    acquire(&bcache.locks[i]);
     for (b = bcache.heads[i].prev; b != &bcache.heads[i]; b = b->prev){
       if(b->refcnt == 0) {
         // Remove from the old bucket
         b->next->prev = b->prev;
         b->prev->next = b->next;
-        // Insert to the new bucket
-        b->next = bcache.heads[bucketno].next;
-        b->prev = &bcache.heads[bucketno];
-        bcache.heads[bucketno].next->prev = b;
-        bcache.heads[bucketno].next = b;
-
+        
         b->dev = dev;
         b->blockno = blockno;
         b->valid = 0;
         b->refcnt = 1;
-        // release(&bcache.locks[i]);
-        release(&bcache.biglock);
-        acquiresleep(&b->lock);
-        return b;
+
+        found = 1;
+        goto out;
       }
     }
-    // release(&bcache.locks[i]);
+  }
+out:
+  if (found) {
+    if (!holding(&bcache.locks[bucketno])) {
+      acquire(&bcache.locks[bucketno]);
+    }
+    // Insert to the new bucket
+    b->next = bcache.heads[bucketno].next;
+    b->prev = &bcache.heads[bucketno];
+    bcache.heads[bucketno].next->prev = b;
+    bcache.heads[bucketno].next = b;
+  }
+  if (bucketno > i) {
+    release(&bcache.locks[bucketno]);
+  }
+  for (; i >= 0; i--) {
+    release(&bcache.locks[i]);
   }
   release(&bcache.biglock);
+  
+  if (found) {
+    acquiresleep(&b->lock);
+    return b;
+  }
+
+  // acquire(&bcache.biglock);
+  // for (int i = 0; i < NBUCKETS; i++) {
+  //   if (i == bucketno) {
+  //     continue;
+  //   }
+  //   acquire(&bcache.locks[i]);
+
+  //   for (b = bcache.heads[i].prev; b != &bcache.heads[i]; b = b->prev){
+  //     if(b->refcnt == 0) {
+  //       // Remove from the old bucket
+  //       b->next->prev = b->prev;
+  //       b->prev->next = b->next;
+  //       // Insert to the new bucket
+  //       acquire(&bcache.locks[bucketno]);
+  //       b->next = bcache.heads[bucketno].next;
+  //       b->prev = &bcache.heads[bucketno];
+  //       bcache.heads[bucketno].next->prev = b;
+  //       bcache.heads[bucketno].next = b;
+  //       b->dev = dev;
+  //       b->blockno = blockno;
+  //       b->valid = 0;
+  //       b->refcnt = 1;
+  //       release(&bcache.locks[bucketno]);
+  //       release(&bcache.locks[i]);
+  //       release(&bcache.biglock);
+  //       acquiresleep(&b->lock);
+  //       return b;
+  //     }
+  //   }
+  //   release(&bcache.locks[i]);
+  // }
+  // release(&bcache.biglock);
   
 
   // acquire(&bcache.lock);
