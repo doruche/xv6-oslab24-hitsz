@@ -379,3 +379,97 @@ int test_pagetable() {
   printf("test_pagetable: %d\n", satp != gsatp);
   return satp != gsatp;
 }
+
+static int
+pte_is_branch(pte_t pte) {
+  return (pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0;
+}
+
+static int
+pte_is_leaf(pte_t pte) {
+  return (pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) != 0;
+}
+
+static void
+vmprint_(pagetable_t pgtbl, uint level) {
+  static char* prefix[] = {
+    "||",
+    "||    ||",
+    "||    ||    ||",
+  };
+  static uint64 cur_vpn[3] = {
+    -1,
+    -1,
+    -1,
+  };
+
+  if (level >= 3) {
+    return;
+  }
+  for (int idx = 0; idx < 512; idx++) {
+    pte_t pte = (pte_t)pgtbl[idx];
+    if (pte_is_branch(pte)) {
+      printf(
+        "%sidx: %d: pa: %p, flags: %s%s%s%s\n",
+        prefix[level],
+        idx,
+        PTE2PA(pte),
+        (pte & PTE_R) ? "r" : "-",
+        (pte & PTE_W) ? "w" : "-",
+        (pte & PTE_X) ? "x" : "-",
+        (pte & PTE_U) ? "u" : "-"
+      );
+      cur_vpn[level] = idx;
+      vmprint_((pagetable_t)PTE2PA(pte), level + 1);
+      cur_vpn[level] = -1;
+    } else if (pte_is_leaf(pte)) {
+      if (level != 2) {
+        panic("vmprint_: leaf pte not at level 2\n");
+      }
+
+      cur_vpn[2] = idx;
+      uint64 pa = PTE2PA(pte);
+      uint64 va = 0;
+      for (int i = 0; i <= 2; i++) {
+        if (cur_vpn[i] == -1) {
+          printf("vmprint_: cur_vpn[%d] not set\n", i);
+          panic("");
+        }
+        va = (va << 9) | cur_vpn[i];
+      }
+      va = (va << 12) | (pa & 0xFFF);
+      printf(
+        "%sidx: %d: va: %p -> pa: %p, flags: %s%s%s%s\n",
+        prefix[level],
+        idx,
+        va,
+        pa,
+        (pte & PTE_R) ? "r" : "-",
+        (pte & PTE_W) ? "w" : "-",
+        (pte & PTE_X) ? "x" : "-",
+        (pte & PTE_U) ? "u" : "-"
+      );
+      cur_vpn[2] = -1;
+    }
+  }
+}
+
+// Sv39
+// output eg.
+// page table 0x0000000087f25000
+// ||idx: 0: pa: 0x0000000087f21000, flags: ----
+// ||   ||idx: 0: pa: 0x0000000087f20000, flags: ----
+// ||   ||   ||idx: 0: va: 0x0000000000000000 -> pa: 0x0000000087f22000, flags: rwxu
+// ||   ||   ||idx: 1: va: 0x0000000000001000 -> pa: 0x0000000087f1f000, flags: rwx-
+// ||   ||   ||idx: 2: va: 0x0000000000002000 -> pa: 0x0000000087f1e000, flags: rwxu
+// ||idx: 255: pa: 0x0000000087f24000, flags: ----
+// ||   ||idx: 511: pa: 0x0000000087f23000, flags: ----
+// ||   ||   ||idx: 510: va: 0x0000003fffffe000 -> pa: 0x0000000087f76000, flags: rw--
+// ||   ||   ||idx: 511: va: 0x0000003ffffff000 -> pa: 0x0000000080007000, flags: r-x-
+void
+vmprint(pagetable_t pgtbl) {
+  printf("page table %p\n", pgtbl);
+  vmprint_(pgtbl, 0);
+  // TODO
+}
+
