@@ -45,6 +45,26 @@ void kvminit() {
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+// Create a new kernel virtual memory page table.
+pagetable_t
+kvmcreat() {
+  pagetable_t pgtbl = (pagetable_t)kalloc();
+  if (pgtbl == 0) return 0;
+  memset(pgtbl, 0, PGSIZE);
+
+  if (mappages(pgtbl, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0) goto bad;
+  if (mappages(pgtbl, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0) goto bad;
+  if (mappages(pgtbl, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0) goto bad;
+  if (mappages(pgtbl, KERNBASE, (uint64)etext - KERNBASE, KERNBASE, PTE_R | PTE_X) != 0) goto bad;
+  if (mappages(pgtbl, (uint64)etext, PHYSTOP - (uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0) goto bad;
+  if (mappages(pgtbl, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0) goto bad;
+
+  return pgtbl;
+bad:
+  kfree((void *)pgtbl);
+  return 0;
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void kvminithart() {

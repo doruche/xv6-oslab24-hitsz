@@ -35,8 +35,18 @@ void procinit(void) {
     char *pa = kalloc();
     if (pa == 0) panic("kalloc");
     uint64 va = KSTACK((int)(p - proc));
-    kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
     p->kstack = va;
+    p->kstack_pa = (uint64)pa;
+
+    pagetable_t k_pgtbl = kvmcreat();
+    if (k_pgtbl == 0) panic("kvmcreat");
+    p->k_pagetable = k_pgtbl;
+    if (mappages(k_pgtbl, va, PGSIZE, (uint64)pa, PTE_R | PTE_W) != 0) {
+      panic("mappages");
+    }
+    // needed as well for some code executing with no process running.
+    // e.g. virtio_blk_outhdr()
+    kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
   kvminithart();
 }
@@ -106,18 +116,31 @@ found:
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if (p->pagetable == 0) {
-    freeproc(p);
-    release(&p->lock);
-    return 0;
+    goto bad;
   }
+
+  // if (mappages(
+  //   p->k_pagetable, 
+  //   p->kstack, 
+  //   PGSIZE, 
+  //   p->kstack_pa, 
+  //   PTE_R | PTE_W
+  // ) != 0) { 
+  //   goto bad;
+  // }
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
+  p->context.sp = p->kstack_pa + PGSIZE;
 
   return p;
+
+bad:
+  freeproc(p);
+  release(&p->lock);
+  return 0;
 }
 
 // free a proc structure and the data hanging from it,
@@ -127,6 +150,10 @@ static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((void *)p->trapframe);
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
+  // currently no need to free p->k_pagetable.
+  // cz almost everything is the same between every kernel page table,
+  // except the mapping of the process's kernel stack, however which is
+  // a fixed mapping depending on pid that won't change.
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -430,7 +457,14 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        w_satp(MAKE_SATP(p->k_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
+
+        extern pagetable_t kernel_pagetable;
+        w_satp(MAKE_SATP(kernel_pagetable));
+        sfence_vma();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

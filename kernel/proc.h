@@ -95,6 +95,8 @@ struct proc {
   int pid;                     // Process ID
 
   // these are private to the process, so p->lock need not be held.
+  pagetable_t k_pagetable;     // Kernel page table
+  uint64 kstack_pa;            // Physical address of kernel stack
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
