@@ -38,12 +38,10 @@ void procinit(void) {
     p->kstack = va;
     p->kstack_pa = (uint64)pa;
 
-    pagetable_t k_pgtbl = kvmcreat();
-    if (k_pgtbl == 0) panic("kvmcreat");
-    p->k_pagetable = k_pgtbl;
-    if (mappages(k_pgtbl, va, PGSIZE, (uint64)pa, PTE_R | PTE_W) != 0) {
-      panic("mappages");
-    }
+    // pagetable_t k_pgtbl = kvmcreat();
+    // if (k_pgtbl == 0) panic("kvmcreat");
+    // p->k_pagetable = k_pgtbl;
+
     // needed as well for some code executing with no process running.
     // e.g. virtio_blk_outhdr()
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
@@ -119,15 +117,13 @@ found:
     goto bad;
   }
 
-  // if (mappages(
-  //   p->k_pagetable, 
-  //   p->kstack, 
-  //   PGSIZE, 
-  //   p->kstack_pa, 
-  //   PTE_R | PTE_W
-  // ) != 0) { 
-  //   goto bad;
-  // }
+  p->k_pagetable = kvmcreat();
+  if (p->k_pagetable == 0) {
+    goto bad;
+  }
+  if (mappages(p->k_pagetable, p->kstack, PGSIZE, p->kstack_pa, PTE_R | PTE_W) != 0) {
+    goto bad;
+  }
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -149,11 +145,12 @@ bad:
 static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((void *)p->trapframe);
   p->trapframe = 0;
+  if (p->k_pagetable) {
+    kfreewalk(p->k_pagetable);
+  }
+  p->k_pagetable = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
-  // currently no need to free p->k_pagetable.
-  // cz almost everything is the same between every kernel page table,
-  // except the mapping of the process's kernel stack, however which is
-  // a fixed mapping depending on pid that won't change.
+  
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -214,12 +211,13 @@ void userinit(void) {
 
   p = allocproc();
   initproc = p;
-
+  
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
-
+  kuvmcopy(p->pagetable, p->k_pagetable, p->sz);
+  
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -268,6 +266,13 @@ int fork(void) {
     release(&np->lock);
     return -1;
   }
+  
+  if (kuvmcopy(np->pagetable, np->k_pagetable, p->sz) < 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
   np->sz = p->sz;
 
   np->parent = p;
